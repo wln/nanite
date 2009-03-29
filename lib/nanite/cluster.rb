@@ -1,13 +1,15 @@
 module Nanite
   class Cluster
-    attr_reader :agent_timeout, :nanites, :reaper, :serializer, :identity, :amq, :redis
+    attr_reader :agent_timeout, :nanites, :reaper, :serializer, :identity, :amq, :redis, :mapper
 
-    def initialize(amq, agent_timeout, identity, serializer, redis=nil)
+    def initialize(amq, agent_timeout, identity, serializer, mapper, redis=nil)
       @amq = amq
       @agent_timeout = agent_timeout
       @identity = identity
       @serializer = serializer
+      @mapper = mapper
       @redis = redis
+      @security = SecurityProvider.get
       if redis
         Nanite::Log.info("using redis for state storage")
         require 'nanite/state'
@@ -32,9 +34,13 @@ module Nanite
     def register(reg)
       case reg
       when Register
-        nanites[reg.identity] = { :services => reg.services, :status => reg.status, :tags => reg.tags }
-        reaper.timeout(reg.identity, agent_timeout + 1) { nanites.delete(reg.identity) }
-        Nanite::Log.info("registered: #{reg.identity}, #{nanites[reg.identity].inspect}")
+        if @security.authorize_registration(reg)
+          nanites[reg.identity] = { :services => reg.services, :status => reg.status, :tags => reg.tags }
+          reaper.timeout(reg.identity, agent_timeout + 1) { nanites.delete(reg.identity) }
+          Nanite::Log.info("registered: #{reg.identity}, #{nanites[reg.identity].inspect}")
+        else
+          Nanite::Log.warning("registration of #{reg.inspect} not authorized")
+        end
       when UnRegister
         nanites.delete(reg.identity)
         Nanite::Log.info("un-registering: #{reg.identity}")
@@ -61,7 +67,32 @@ module Nanite
         amq.queue(ping.identity).publish(serializer.dump(Advertise.new))
       end
     end
-
+    
+    # forward request coming from agent
+    def handle_request(request)
+      if @security.authorize_request(request)
+        result = Result.new(request.token, request.from, nil, mapper.identity)
+        intm_handler = lambda do |res|
+          result.results = res
+          forward_response(result, request.persistent)
+        end
+        ok = mapper.send_request(request, :intermediate_handler => intm_handler) do |res|
+          result.results = res
+          forward_response(result, request.persistent)
+        end
+        if ok == false
+          forward_response(result, request.persistent)
+        end
+      else
+        Nanite::Log.warning("request #{request.inspect} not authorized")
+      end
+    end
+    
+    # forward response back to agent that originally made the request
+    def forward_response(res, persistent)
+      amq.queue(res.to).publish(serializer.dump(res), :persistent => persistent)
+    end
+    
     # returns least loaded nanite that provides given service
     def least_loaded(service, tags=[])
       candidates = nanites_providing(service,tags)
@@ -104,6 +135,7 @@ module Nanite
     def setup_queues
       setup_heartbeat_queue
       setup_registration_queue
+      setup_request_queue
     end
 
     def setup_heartbeat_queue
@@ -130,6 +162,20 @@ module Nanite
         amq.queue("registration-#{identity}", :exclusive => true).bind(amq.fanout('registration', :durable => true)).subscribe do |msg|
           Nanite::Log.debug('got registration')
           register(serializer.load(msg))
+        end
+      end
+    end
+    
+    def setup_request_queue
+      if @redis
+        amq.queue("request").bind(amq.fanout('request', :durable => true)).subscribe do |msg|
+          Nanite::Log.debug('got request')
+          handle_request(serializer.load(msg))
+        end
+      else
+        amq.queue("request-#{identity}", :exclusive => true).bind(amq.fanout('request', :durable => true)).subscribe do |msg|
+          Nanite::Log.debug('got request')
+          handle_request(serializer.load(msg))
         end
       end
     end

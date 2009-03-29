@@ -119,8 +119,8 @@ module Nanite
         at_exit { pid_file.remove }
       end
       @amq = start_amqp(@options)
-      @cluster = Cluster.new(@amq, @options[:agent_timeout], @options[:identity], @serializer, @options[:redis])
       @job_warden = JobWarden.new(@serializer)
+      @cluster = Cluster.new(@amq, @options[:agent_timeout], @options[:identity], @serializer, self, @options[:redis])
       Nanite::Log.info('starting mapper')
       setup_queues
       start_console if @options[:console] && !@options[:daemonize]
@@ -165,9 +165,14 @@ module Nanite
     #
     # @api :public:
     def request(type, payload = '', opts = {}, &blk)
-      intm_handler = opts.delete(:intermediate_handler)
       request = build_deliverable(Request, type, payload, opts)
+      send_request(request, opts, &blk)
+    end
+
+    # Send request with pre-built request instance
+    def send_request(request, opts = {}, &blk)
       request.reply_to = identity
+      intm_handler = opts.delete(:intermediate_handler)
       targets = cluster.targets_for(request)
       if !targets.empty?
         job = job_warden.new_job(request, targets, intm_handler, blk)
@@ -180,7 +185,7 @@ module Nanite
         false
       end
     end
-
+      
     # Make a nanite request which does not expect a response.
     #
     # ==== Parameters
