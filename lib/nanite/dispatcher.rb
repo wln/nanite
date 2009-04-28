@@ -12,7 +12,7 @@ module Nanite
       @evmclass = EM
     end
 
-    def dispatch(deliverable)
+    def dispatch(deliverable, postproc_callback = nil)
       prefix, meth = deliverable.type.split('/')[1..-1]
       meth ||= :index
       actor = registry.actor_for(prefix)
@@ -31,6 +31,7 @@ module Nanite
           r = Result.new(deliverable.token, deliverable.reply_to, r, identity)
           amq.queue(deliverable.reply_to, :no_declare => options[:secure]).publish(serializer.dump(r))
         end
+        postproc_callback.call if postproc_callback
         r
       })
     end

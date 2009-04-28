@@ -1,3 +1,5 @@
+require 'nanite/agent_queue_loop'
+
 module Nanite
   class Agent
     include AMQPHelper
@@ -5,7 +7,7 @@ module Nanite
     include ConsoleHelper
     include DaemonizeHelper
 
-    attr_reader :identity, :options, :serializer, :dispatcher, :registry, :amq, :tags
+    attr_reader :identity, :options, :serializer, :dispatcher, :registry, :amq, :tags, :qloop
     attr_accessor :status_proc
 
     DEFAULT_OPTIONS = COMMON_DEFAULT_OPTIONS.merge({:user => 'nanite', :ping_time => 15,
@@ -163,28 +165,32 @@ module Nanite
       instance_eval(File.read(init_path), init_path) if File.exist?(init_path)
     end
 
-    def receive(packet)
+    def receive(packet, postproc_callback = nil)
       packet = serializer.load(packet)
       case packet
       when Advertise
         Nanite::Log.debug("handling Advertise: #{packet}")
         advertise_services
+        postproc_callback.call if postproc_callback
       when Request, Push
         Nanite::Log.debug("handling Request: #{packet}")
         if @security && !@security.authorize(packet)
           if packet.kind_of?(Request)
             r = Result.new(packet.token, packet.reply_to, @deny_token, identity)
             amq.queue(packet.reply_to, :no_declare => options[:secure]).publish(serializer.dump(r))
+            postproc_callback.call if postproc_callback
           end
         else
-          dispatcher.dispatch(packet)
+          dispatcher.dispatch(packet, postproc_callback)
         end
       when Result
         Nanite::Log.debug("handling Result: #{packet}")
         @mapper_proxy.handle_result(packet)
+        #? postproc_callback.call
       when IntermediateMessage
         Nanite::Log.debug("handling Intermediate Result: #{packet}")
         @mapper_proxy.handle_intermediate_result(packet)
+        #? postproc_callback.call
       end
     end
     
@@ -193,16 +199,29 @@ module Nanite
       @tags.uniq!
     end
 
+    # def setup_queue
+    #   amq.queue(identity, :durable => true).subscribe(:ack => true) do |info, msg|
+    #     info.ack
+    #     receive(msg)
+    #   end
+    # end
+    
     def setup_queue
-      amq.queue(identity, :durable => true).subscribe(:ack => true) do |info, msg|
+      capacity = 1; delay = 1
+      @qloop = AgentQueueLoop.new(amq.queue(identity, :durable => true), capacity, delay)
+      @qloop.start_processing{|info, msg, postproc_callback|
         info.ack
-        receive(msg)
-      end
+        receive(msg, postproc_callback)
+      }
     end
 
     def setup_heartbeat
       EM.add_periodic_timer(options[:ping_time]) do
-        amq.fanout('heartbeat', :no_declare => options[:secure]).publish(serializer.dump(Ping.new(identity, status_proc.call)))
+        send_heartbeat = @qloop.send_heartbeat?
+        puts "send_heartbeat: #{send_heartbeat}"
+        if send_heartbeat
+          amq.fanout('heartbeat', :no_declare => options[:secure]).publish(serializer.dump(Ping.new(identity, status_proc.call)))
+        end
       end
     end
     
