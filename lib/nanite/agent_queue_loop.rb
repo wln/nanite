@@ -1,8 +1,14 @@
 module Nanite
   class AgentQueueLoop
-    
+
+    # FIX:
+    # Two current issues:
+    #
+    #   1. Does not appear to execute processor_step when processing block is in progress, even if capacity is remaining -- need to look at use of EM.defer here.
+    #   2. Specs for Cluster::Route still fail -- receive pop calls from this processor, seem to be left over from Agent spec.
+
     attr_accessor :should_exit
-    
+
     def initialize(queue, capacity, retry_delay)
       @agent_mq = queue
       @capacity = capacity

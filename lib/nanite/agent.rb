@@ -193,19 +193,12 @@ module Nanite
         #? postproc_callback.call
       end
     end
-    
+
     def tag(*tags)
       tags.each {|t| @tags << t}
       @tags.uniq!
     end
 
-    # def setup_queue
-    #   amq.queue(identity, :durable => true).subscribe(:ack => true) do |info, msg|
-    #     info.ack
-    #     receive(msg)
-    #   end
-    # end
-    
     def setup_queue
       capacity = 1; delay = 1
       @qloop = AgentQueueLoop.new(amq.queue(identity, :durable => true), capacity, delay)
