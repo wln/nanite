@@ -165,32 +165,37 @@ module Nanite
       instance_eval(File.read(init_path), init_path) if File.exist?(init_path)
     end
 
-    def receive(packet, postproc_callback = nil)
+    def receive(packet, job_decrement_callback = nil, scheduler_callback = nil)
       packet = serializer.load(packet)
       case packet
       when Advertise
         Nanite::Log.debug("handling Advertise: #{packet}")
         advertise_services
-        postproc_callback.call if postproc_callback
+        job_decrement_callback.call if job_decrement_callback
+        scheduler_callback.call if scheduler_callback
       when Request, Push
         Nanite::Log.debug("handling Request: #{packet}")
         if @security && !@security.authorize(packet)
           if packet.kind_of?(Request)
             r = Result.new(packet.token, packet.reply_to, @deny_token, identity)
             amq.queue(packet.reply_to, :no_declare => options[:secure]).publish(serializer.dump(r))
-            postproc_callback.call if postproc_callback
+            job_decrement_callback.call if job_decrement_callback
+            scheduler_callback.call if scheduler_callback
           end
         else
-          dispatcher.dispatch(packet, postproc_callback)
+          dispatcher.dispatch(packet, job_decrement_callback)
+          scheduler_callback.call if scheduler_callback
         end
       when Result
         Nanite::Log.debug("handling Result: #{packet}")
         @mapper_proxy.handle_result(packet)
-        #? postproc_callback.call
+        job_decrement_callback.call if job_decrement_callback
+        scheduler_callback.call if scheduler_callback
       when IntermediateMessage
         Nanite::Log.debug("handling Intermediate Result: #{packet}")
         @mapper_proxy.handle_intermediate_result(packet)
-        #? postproc_callback.call
+        job_decrement_callback.call if job_decrement_callback
+        scheduler_callback.call if scheduler_callback
       end
     end
 
@@ -200,11 +205,11 @@ module Nanite
     end
 
     def setup_queue
-      capacity = 1; delay = 1
+      capacity = 2; delay = 1
       @qloop = AgentQueueLoop.new(amq.queue(identity, :durable => true), capacity, delay)
-      @qloop.start_processing{|info, msg, postproc_callback|
+      @qloop.start_processing{|info, msg, job_decrement_callback, scheduler_callback|
         info.ack
-        receive(msg, postproc_callback)
+        receive(msg, job_decrement_callback, scheduler_callback)
       }
     end
 

@@ -4,8 +4,8 @@ module Nanite
     # FIX:
     # Two current issues:
     #
-    #   1. Does not appear to execute processor_step when processing block is in progress, even if capacity is remaining -- need to look at use of EM.defer here.
-    #   2. Specs for Cluster::Route still fail -- receive pop calls from this processor, seem to be left over from Agent spec.
+    #   1. Does not appear to execute processor_step when processing block is in progress, even if capacity is remaining -- need to look at use of EM.defer here, but further down in call pattern than here.
+    #   2. Specs for Cluster::Route still fail -- they receive pop calls from this processor, seem to be left over from run of Agent spec.
 
     attr_accessor :should_exit
 
@@ -19,6 +19,7 @@ module Nanite
       @retry_delay = retry_delay
       @should_exit = false
     end
+
     
     def accept_set_full_delay; @retry_delay; end
     def mq_empty_delay; @retry_delay; end
@@ -39,7 +40,6 @@ module Nanite
 
         # get next job off queue
         @agent_mq.pop do |info, msg|
-          puts "(i) info:? #{info.inspect} msg:? #{msg.inspect}"
         
           if msg
             # entry on mq: 
@@ -48,8 +48,7 @@ module Nanite
             #    b. decrements the accept count
             #    c. kicks the processor loop off again.
             EM.next_tick {
-              puts "(pb) info:? #{info.inspect} msg:? #{msg.inspect}"
-              @processing_block.call(info, msg, lambda { decr_accept_count; schedule_processor_step(0) })
+              @processing_block.call(info, msg, lambda { decr_accept_count }, lambda { schedule_processor_step(0) })
             }
           else
             # no entries waiting in mq
@@ -60,17 +59,17 @@ module Nanite
       else
         # full.  should get here only in processor_step race conditions.
         if pending_processor_steps_count_gt_0?
-          puts "already pending processor steps, none added."
+          Nanite::Log.debug("Accept limit reached, and already have pending processor steps; no processor steps added.")
         else
           schedule_processor_step(accept_set_full_delay)
         end
       end
     end
 
-    def incr_accept_count; x = @mutex.synchronize { @accept_count += 1 }; puts "incr_accept_count: #{x}"; x; end
-    def decr_accept_count; x = @mutex.synchronize { @accept_count -= 1 }; puts "decr_accept_count: #{x}"; x; end
-    def incr_pending_processor_steps_count; x = @mutex.synchronize { @processor_steps_count += 1 }; puts "incr_pending_processor_steps_count: #{x}"; x; end
-    def decr_pending_processor_steps_count; x = @mutex.synchronize { @processor_steps_count -= 1 }; puts "decr_pending_processor_steps_count: #{x}"; x; end
+    def incr_accept_count; x = @mutex.synchronize { @accept_count += 1 }; Nanite::Log.debug("incr_accept_count: #{x}"); x; end
+    def decr_accept_count; x = @mutex.synchronize { @accept_count -= 1 }; Nanite::Log.debug("decr_accept_count: #{x}"); x; end
+    def incr_pending_processor_steps_count; x = @mutex.synchronize { @processor_steps_count += 1 }; Nanite::Log.debug("incr_pending_processor_steps_count: #{x} curr accept_count: #{@accept_count}"); x; end
+    def decr_pending_processor_steps_count; x = @mutex.synchronize { @processor_steps_count -= 1 }; Nanite::Log.debug("decr_pending_processor_steps_count: #{x} curr accept_count: #{@accept_count}"); x; end
     def pending_processor_steps_count_gt_0?; @mutex.synchronize { @processor_steps_count > 0 }; end
     
     def accept_count_lt_cap?; @mutex.synchronize { @accept_count < @capacity }; end
