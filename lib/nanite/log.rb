@@ -8,7 +8,8 @@ module Nanite
     @logger = nil
     
     class << self
-      attr_accessor :logger, :log_level, :log_file #:nodoc
+      attr_accessor :logger, :log_file #:nodoc
+      attr_reader   :log_level #:nodoc
       
       # Use Nanite::Logger.init when you want to set up the logger manually.  Arguments to this method
       # get passed directly to Logger.new, so check out the documentation for the standard Logger class
@@ -18,7 +19,7 @@ module Nanite
       #
       # It also configures the Logger instance it creates to use the custom Nanite::Log::Formatter class.
       def init(identity, path = false)
-        @file = STDOUT
+        @log_file = STDOUT
         if path
           @log_file = File.join(path, "nanite.#{identity}.log")
         end
@@ -27,6 +28,11 @@ module Nanite
         level(@log_level = :info)
       end
       
+      def log_level=(log_level)
+        @log_level = log_level.to_sym
+        level(@log_level)
+      end
+
       # Sets the level for the Logger object by symbol.  Valid arguments are:
       #
       #  :debug
