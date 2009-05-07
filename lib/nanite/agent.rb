@@ -205,7 +205,7 @@ module Nanite
     end
 
     def setup_queue
-      capacity = 2; delay = 1
+      capacity = 1; delay = 1
       @qloop = AgentQueueLoop.new(amq.queue(identity, :durable => true), capacity, delay)
       @qloop.start_processing{|info, msg, job_decrement_callback, scheduler_callback|
         info.ack
@@ -216,7 +216,7 @@ module Nanite
     def setup_heartbeat
       EM.add_periodic_timer(options[:ping_time]) do
         send_heartbeat = @qloop.send_heartbeat?
-        puts "send_heartbeat: #{send_heartbeat}"
+        Nanite::Log.debug "send_heartbeat: #{send_heartbeat}"
         if send_heartbeat
           amq.fanout('heartbeat', :no_declare => options[:secure]).publish(serializer.dump(Ping.new(identity, status_proc.call)))
         end

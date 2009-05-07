@@ -1,11 +1,7 @@
 module Nanite
   class AgentQueueLoop
 
-    # FIX:
-    # Two current issues:
-    #
-    #   1. Does not appear to execute processor_step when processing block is in progress, even if capacity is remaining -- need to look at use of EM.defer here, but further down in call pattern than here.
-    #   2. Specs for Cluster::Route still fail -- they receive pop calls from this processor, seem to be left over from run of Agent spec.
+    # FIX: Specs for Cluster::Route still fail -- they receive pop calls from this processor, seem to be left over from run of Agent spec.
 
     attr_accessor :should_exit
 
@@ -42,11 +38,6 @@ module Nanite
         @agent_mq.pop do |info, msg|
         
           if msg
-            # entry on mq: 
-            #  1. call a block that:
-            #    a. calls the processing block.
-            #    b. decrements the accept count
-            #    c. kicks the processor loop off again.
             EM.next_tick {
               @processing_block.call(info, msg, lambda { decr_accept_count }, lambda { schedule_processor_step(0) })
             }
